@@ -462,10 +462,6 @@ const Executions = lazyWithRetry(
   () => import("src/sections/agent-playground/Executions/Executions"),
 );
 
-// TODO: Remove after verifying the error boundary
-const ErrorBoundaryTest = () => {
-  throw new Error("This is a test error to preview the error boundary UI");
-};
 
 const DashboardRoutes = () => {
   const location = useLocation();
@@ -673,26 +669,22 @@ export const dashboardRoutes = (
         </RoleProtection>
       ),
     },
-    ...(!isOSS
-      ? [
-          {
-            path: "falcon-ai-connectors",
-            element: (
-              <RoleProtection
-                allowedRoles={[
-                  "Owner",
-                  "Admin",
-                  "Member",
-                  "workspace_admin",
-                  "workspace_member",
-                ]}
-              >
-                <FalconAIConnectorsPage />
-              </RoleProtection>
-            ),
-          },
-        ]
-      : []),
+    {
+      path: "falcon-ai-connectors",
+      element: (
+        <RoleProtection
+          allowedRoles={[
+            "Owner",
+            "Admin",
+            "Member",
+            "workspace_admin",
+            "workspace_member",
+          ]}
+        >
+          <FalconAIConnectorsPage />
+        </RoleProtection>
+      ),
+    },
   ];
 
   // Conditionally include billing routes:
@@ -880,14 +872,10 @@ export const dashboardRoutes = (
       ],
     },
 
-    ...(!isOSS
-      ? [
-          {
-            path: "falcon-ai/:conversationId?",
-            element: <FalconAIPage />,
-          },
-        ]
-      : []),
+    {
+      path: "falcon-ai/:conversationId?",
+      element: <FalconAIPage />,
+    },
     {
       path: "tasks",
       children: [
@@ -1462,11 +1450,6 @@ export const dashboardRoutes = (
     {
       path: "dashboards/:dashboardId/widget/:widgetId",
       element: <WidgetEditorView />,
-    },
-    // TODO: Remove this test route after verifying the error boundary
-    {
-      path: "error-test",
-      element: <ErrorBoundaryTest />,
     },
   ];
 

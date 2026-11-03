@@ -35,6 +35,7 @@ import useErrorLocalizerPoll from "../hooks/useErrorLocalizerPoll";
 import { useExecuteCompositeEvalAdhoc } from "../hooks/useCompositeEval";
 import { unwrapCellValue } from "./datasetCellValue";
 import { buildTree } from "./columnTree";
+import RequiredMark from "src/components/RequiredMark";
 
 const DATASET_PAGE_SIZE = 25;
 
@@ -1002,10 +1003,20 @@ const DatasetTestMode = React.forwardRef(
     }, [sourceColumns, isWorkbenchMode]);
 
     // Resolve UUID-based mapping values to display names (edit mode).
-    // Handles both plain UUIDs and "uuid.path" nested references.
+    // Handles plain UUIDs, "uuid.path" nested references, and workbench
+    // field identifiers (e.g. "input_prompt" → "model_input").
     const uuidResolutionDone = React.useRef(false);
     useEffect(() => {
-      if (!columns.length && !Object.keys(extraFieldToName).length) return;
+      const fieldToName = {};
+      Object.entries(sourceNameToField).forEach(([name, field]) => {
+        fieldToName[field] = name;
+      });
+      if (
+        !columns.length &&
+        !Object.keys(extraFieldToName).length &&
+        !Object.keys(fieldToName).length
+      )
+        return;
       if (uuidResolutionDone.current) return;
       const idToName = {};
       columns.forEach((c) => {
@@ -1029,12 +1040,15 @@ const DatasetTestMode = React.forwardRef(
           } else if (extraFieldToName[val]) {
             next[variable] = extraFieldToName[val];
             changed = true;
+          } else if (fieldToName[val]) {
+            next[variable] = fieldToName[val];
+            changed = true;
           }
         });
         if (changed) uuidResolutionDone.current = true;
         return changed ? next : prev;
       });
-    }, [columns, extraFieldToName, jsonSchemas]);
+    }, [columns, extraFieldToName, sourceNameToField, jsonSchemas]);
 
     // Prune stale mapping keys when variables list changes (instruction edits).
     useEffect(() => {
@@ -1406,7 +1420,8 @@ const DatasetTestMode = React.forwardRef(
         {!initialDatasetId && !isWorkbenchMode && (
           <Box>
             <Typography variant="body2" fontWeight={600} sx={{ mb: 0.5 }}>
-              Choose Dataset<span style={{ color: "#d32f2f" }}>*</span>
+              Choose Dataset
+              <RequiredMark />
             </Typography>
             <Autocomplete
               fullWidth

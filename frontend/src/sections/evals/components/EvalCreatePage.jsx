@@ -36,10 +36,16 @@ import { useCompositeChildrenUnionKeys } from "../hooks/useCompositeChildrenKeys
 import CodeEvalEditor, { PYTHON_CODE_TEMPLATE } from "./CodeEvalEditor";
 import CompositeDetailPanel from "./CompositeDetailPanel";
 import UnsavedChangesDialog from "src/sections/projects/MonitorsView/UnsavedChangesDialog";
-import { extractVariables } from "src/utils/utils";
+import {
+  extractVariables,
+  extractVariablesFromMessages,
+} from "src/utils/utils";
 import { useAuthContext } from "src/auth/hooks";
 import { PERMISSIONS, RolePermission } from "src/utils/rolePermissionMapping";
 import { buildDataInjection } from "src/sections/common/EvalPicker/evalPickerConfigUtils";
+
+const ERROR_LOCALIZER_OSS_TOOLTIP =
+  "Error Localization is not available on self-hosted (OSS) deployments.";
 
 const EVAL_TYPE_TABS = [
   { value: "agent", label: "Agents" },
@@ -142,7 +148,7 @@ const EvalCreatePage = () => {
   const canEditEvals =
     RolePermission.EVALS[PERMISSIONS.EDIT_CREATE_DELETE_EVALS][role];
   const { enqueueSnackbar } = useSnackbar();
-  const { isOSS } = useDeploymentMode();
+  const { isOSS, isLoading: deploymentModeLoading } = useDeploymentMode();
   const createEval = useCreateEval();
   const createComposite = useCreateCompositeEval();
   const testPlaygroundRef = useRef(null);
@@ -152,7 +158,7 @@ const EvalCreatePage = () => {
 
   // --- Single eval state ---
   const [name, setName] = useState("");
-  const [evalType, setEvalType] = useState("agent");
+  const [evalType, setEvalType] = useState(isOSS ? "llm" : "agent");
   const [instructions, setInstructions] = useState("");
   const [code, setCode] = useState(PYTHON_CODE_TEMPLATE);
   const [codeLanguage, setCodeLanguage] = useState("python");
@@ -170,11 +176,11 @@ const EvalCreatePage = () => {
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState([]);
   const [contextOptions, setContextOptions] = useState(["variables_only"]);
   const [errorLocalizerEnabled, setErrorLocalizerEnabled] = useState(false);
+  const errorLocalizerActive = errorLocalizerEnabled && !isOSS;
   const [tags, setTags] = useState([]);
   const [fewShotExamples, setFewShotExamples] = useState([]);
   const [messages, setMessages] = useState([{ role: "system", content: "" }]);
   const [templateFormat, setTemplateFormat] = useState("mustache");
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [datasetColumns, setDatasetColumns] = useState([]);
   const [datasetJsonSchemas, setDatasetJsonSchemas] = useState({});
 
@@ -244,9 +250,17 @@ const EvalCreatePage = () => {
     setIsTesting(false);
   }, []);
 
+  const evalTypeDefaulted = useRef(false);
+  useEffect(() => {
+    if (deploymentModeLoading || evalTypeDefaulted.current) return;
+    evalTypeDefaulted.current = true;
+    setEvalType(isOSS ? "llm" : "agent");
+  }, [deploymentModeLoading, isOSS]);
+
   // Load existing draft from URL, or create a new one
   const draftLoaded = useRef(false);
   useEffect(() => {
+    if (deploymentModeLoading) return;
     if (draftCreating.current) return;
 
     // If URL has a draft ID, load its config
@@ -312,7 +326,7 @@ const EvalCreatePage = () => {
             endpoints.develop.eval.createEvalTemplateV2,
             {
               is_draft: true,
-              eval_type: "agent",
+              eval_type: isOSS ? "llm" : "agent",
               output_type: "pass_fail",
               model: "turing_large",
               pass_threshold: 0.5,
@@ -328,7 +342,7 @@ const EvalCreatePage = () => {
         }
       })();
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [deploymentModeLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-save config to draft (debounced, skip initial load)
   const autoSaveTimer = useRef(null);
@@ -367,7 +381,7 @@ const EvalCreatePage = () => {
       knowledge_bases: evalType === "agent" ? knowledgeBaseIds : undefined,
       data_injection: evalType === "agent" ? dataInjection : undefined,
       summary: evalType === "agent" ? summary : undefined,
-      error_localizer_enabled: errorLocalizerEnabled,
+      error_localizer_enabled: errorLocalizerActive,
       messages: evalType === "llm" ? messages : undefined,
       // Send [] for LLM evals so the BE can persist a user-cleared list.
       few_shot_examples:
@@ -393,7 +407,7 @@ const EvalCreatePage = () => {
     connectorIds,
     knowledgeBaseIds,
     contextOptions,
-    errorLocalizerEnabled,
+    errorLocalizerActive,
     messages,
     fewShotExamples,
     templateFormat,
@@ -432,6 +446,10 @@ const EvalCreatePage = () => {
         "Turing models are not available in OSS. Please select your own model.",
         { variant: "error" },
       );
+      return;
+    }
+    if (isOSS && evalType !== "code" && !model) {
+      enqueueSnackbar("Please select a model.", { variant: "error" });
       return;
     }
     if (!draftId) {
@@ -619,10 +637,15 @@ const EvalCreatePage = () => {
   }, []);
   // Mirrors the Test button's content rules: prompt-based single evals must
   // have a template that actually references inputs, otherwise the saved
-  // eval can't be run against real data.
+  // eval can't be run against real data. For LLM evals the variable can
+  // live in any turn (System / User / Assistant), so scan the whole
+  // messages array in addition to instructions.
   const singleHasInstructionVariables =
-    !!instructions.trim() &&
-    extractVariables(instructions, templateFormat).length > 0;
+    evalType === "llm"
+      ? extractVariablesFromMessages(instructions, messages, templateFormat)
+          .length > 0
+      : !!instructions.trim() &&
+        extractVariables(instructions, templateFormat).length > 0;
   const canSaveSingle =
     !!name.trim() &&
     (evalType === "code" ? !!code.trim() : singleHasInstructionVariables);
@@ -632,6 +655,11 @@ const EvalCreatePage = () => {
   // and can be tested individually.
   const canSave =
     canEditEvals && (mode === "single" ? canSaveSingle : canSaveComposite);
+
+
+  if (deploymentModeLoading) {
+    return null;
+  }
 
   return (
     <Box
@@ -831,7 +859,16 @@ const EvalCreatePage = () => {
                   {/* Eval Type Toggle — pill tabs (same as EvalAccordion Text/Image/Audio) */}
                   <Tabs
                     value={evalType}
-                    onChange={(_, val) => setEvalType(val)}
+                    onChange={(_, val) => {
+                      if (isOSS && val === "agent") {
+                        enqueueSnackbar(
+                          "Agent evaluations require an Enterprise (EE) license. Upgrade to EE license key to enable.",
+                          { variant: "info" },
+                        );
+                        return;
+                      }
+                      setEvalType(val);
+                    }}
                     variant="standard"
                     scrollButtons={false}
                     TabIndicatorProps={{ style: { display: "none" } }}
@@ -858,35 +895,64 @@ const EvalCreatePage = () => {
                           : "background.neutral",
                     }}
                   >
-                    {EVAL_TYPE_TABS.map((tab) => (
-                      <Tab
-                        key={tab.value}
-                        value={tab.value}
-                        label={tab.label}
-                        sx={{
-                          bgcolor:
-                            evalType === tab.value
-                              ? (theme) =>
-                                  theme.palette.mode === "dark"
-                                    ? "rgba(255,255,255,0.12)"
-                                    : "background.paper"
-                              : "transparent",
-                          boxShadow:
-                            evalType === tab.value
-                              ? (theme) =>
-                                  theme.palette.mode === "dark"
-                                    ? "none"
-                                    : "0 1px 3px rgba(0,0,0,0.08)"
-                              : "none",
-                          borderRadius: "6px",
-                          fontWeight: evalType === tab.value ? 600 : 400,
-                          color:
-                            evalType === tab.value
-                              ? "text.primary"
-                              : "text.disabled",
-                        }}
-                      />
-                    ))}
+                    {EVAL_TYPE_TABS.map((tab) => {
+                      const locked = isOSS && tab.value === "agent";
+                      return (
+                        <Tab
+                          key={tab.value}
+                          value={tab.value}
+                          label={
+                            locked ? (
+                              <CustomTooltip
+                                show
+                                type=""
+                                arrow
+                                title="Agent evaluations require an Enterprise (EE) license. Upgrade to EE license key to enable."
+                              >
+                                <Box
+                                  sx={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 0.5,
+                                  }}
+                                >
+                                  {tab.label}
+                                  <Iconify
+                                    icon="mdi:lock-outline"
+                                    width={14}
+                                  />
+                                </Box>
+                              </CustomTooltip>
+                            ) : (
+                              tab.label
+                            )
+                          }
+                          sx={{
+                            bgcolor:
+                              evalType === tab.value
+                                ? (theme) =>
+                                    theme.palette.mode === "dark"
+                                      ? "rgba(255,255,255,0.12)"
+                                      : "background.paper"
+                                : "transparent",
+                            boxShadow:
+                              evalType === tab.value
+                                ? (theme) =>
+                                    theme.palette.mode === "dark"
+                                      ? "none"
+                                      : "0 1px 3px rgba(0,0,0,0.08)"
+                                : "none",
+                            borderRadius: "6px",
+                            fontWeight: evalType === tab.value ? 600 : 400,
+                            opacity: locked ? 0.6 : 1,
+                            color:
+                              evalType === tab.value
+                                ? "text.primary"
+                                : "text.disabled",
+                          }}
+                        />
+                      );
+                    })}
                   </Tabs>
 
                   {/* ═══ Tab-specific content ═══ */}
@@ -1031,23 +1097,33 @@ const EvalCreatePage = () => {
                       produce model traces for the localizer to introspect. */}
                   {evalType !== "code" && (
                     <Box>
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={errorLocalizerEnabled}
-                            onChange={(e) =>
-                              setErrorLocalizerEnabled(e.target.checked)
+                      <CustomTooltip
+                        show={isOSS}
+                        type=""
+                        arrow
+                        title={ERROR_LOCALIZER_OSS_TOOLTIP}
+                      >
+                        <Box sx={{ display: "inline-flex" }}>
+                          <FormControlLabel
+                            control={
+                              <Checkbox
+                                checked={errorLocalizerActive}
+                                disabled={isOSS}
+                                onChange={(e) =>
+                                  setErrorLocalizerEnabled(e.target.checked)
+                                }
+                                size="small"
+                              />
                             }
-                            size="small"
+                            label={
+                              <Typography variant="body2" fontWeight={500}>
+                                Error Localization
+                              </Typography>
+                            }
+                            sx={{ ml: 0 }}
                           />
-                        }
-                        label={
-                          <Typography variant="body2" fontWeight={500}>
-                            Error Localization
-                          </Typography>
-                        }
-                        sx={{ ml: 0 }}
-                      />
+                        </Box>
+                      </CustomTooltip>
                       <Typography
                         variant="caption"
                         color="text.secondary"
@@ -1059,123 +1135,68 @@ const EvalCreatePage = () => {
                     </Box>
                   )}
 
-                  {/* Advanced — collapsible */}
+                  {/* Description */}
                   <Box>
-                    <Button
+                    <Typography
+                      variant="body2"
+                      fontWeight={600}
+                      sx={{ mb: 0.5 }}
+                    >
+                      Description
+                    </Typography>
+                    <TextField
+                      fullWidth
                       size="small"
-                      onClick={() => setShowAdvanced((p) => !p)}
-                      startIcon={
-                        <Iconify
-                          icon={
-                            showAdvanced ? "mdi:chevron-up" : "mdi:chevron-down"
-                          }
-                          width={16}
-                        />
-                      }
+                      multiline
+                      minRows={2}
+                      placeholder="What does this evaluation check?"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                    />
+                  </Box>
+
+                  {/* Tags */}
+                  <Box>
+                    <Typography
+                      variant="body2"
+                      fontWeight={600}
+                      sx={{ mb: 0.5 }}
+                    >
+                      Tags
+                    </Typography>
+                    <Box
                       sx={{
-                        textTransform: "none",
-                        fontSize: "13px",
-                        color: "text.secondary",
-                        fontWeight: 500,
-                        px: 0,
-                        "&:hover": {
-                          bgcolor: "transparent",
-                          color: "text.primary",
-                        },
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 0.75,
                       }}
                     >
-                      Advanced
-                      {(description || tags.length > 0) && (
-                        <Chip
-                          label={[
-                            description && "description",
-                            tags.length > 0 && `${tags.length} tags`,
-                          ]
-                            .filter(Boolean)
-                            .join(", ")}
-                          size="small"
-                          sx={{ ml: 1, fontSize: "10px", height: 18 }}
-                        />
-                      )}
-                    </Button>
-
-                    {showAdvanced && (
-                      <Box
-                        sx={{
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 2,
-                          mt: 1.5,
-                          pl: 0.5,
-                        }}
-                      >
-                        {/* Description */}
-                        <Box>
-                          <Typography
-                            variant="caption"
-                            fontWeight={600}
-                            color="text.secondary"
-                            sx={{ mb: 0.5, display: "block" }}
-                          >
-                            Description
-                          </Typography>
-                          <TextField
-                            fullWidth
+                      {EVAL_TAGS.map((tag) => {
+                        const selected = tags.includes(tag.value);
+                        return (
+                          <Chip
+                            key={tag.value}
+                            icon={<Iconify icon={tag.icon} width={14} />}
+                            label={tag.label}
                             size="small"
-                            multiline
-                            minRows={2}
-                            placeholder="What does this evaluation check?"
-                            value={description}
-                            onChange={(e) => setDescription(e.target.value)}
-                          />
-                        </Box>
-
-                        {/* Tags */}
-                        <Box>
-                          <Typography
-                            variant="caption"
-                            fontWeight={600}
-                            color="text.secondary"
-                            sx={{ mb: 0.75, display: "block" }}
-                          >
-                            Tags
-                          </Typography>
-                          <Box
+                            variant={selected ? "filled" : "outlined"}
+                            color={selected ? "primary" : "default"}
+                            onClick={() =>
+                              setTags((prev) =>
+                                selected
+                                  ? prev.filter((t) => t !== tag.value)
+                                  : [...prev, tag.value],
+                              )
+                            }
                             sx={{
-                              display: "flex",
-                              flexWrap: "wrap",
-                              gap: 0.75,
+                              fontSize: "12px",
+                              cursor: "pointer",
+                              "& .MuiChip-icon": { fontSize: "14px" },
                             }}
-                          >
-                            {EVAL_TAGS.map((tag) => {
-                              const selected = tags.includes(tag.value);
-                              return (
-                                <Chip
-                                  key={tag.value}
-                                  icon={<Iconify icon={tag.icon} width={14} />}
-                                  label={tag.label}
-                                  size="small"
-                                  variant={selected ? "filled" : "outlined"}
-                                  color={selected ? "primary" : "default"}
-                                  onClick={() =>
-                                    setTags((prev) =>
-                                      selected
-                                        ? prev.filter((t) => t !== tag.value)
-                                        : [...prev, tag.value],
-                                    )
-                                  }
-                                  sx={{
-                                    fontSize: "12px",
-                                    cursor: "pointer",
-                                    "& .MuiChip-icon": { fontSize: "14px" },
-                                  }}
-                                />
-                              );
-                            })}
-                          </Box>
-                        </Box>
-                      </Box>
-                    )}
+                          />
+                        );
+                      })}
+                    </Box>
                   </Box>
                 </>
               ) : (
@@ -1260,7 +1281,7 @@ const EvalCreatePage = () => {
                   onColumnsLoaded={handleColumnsLoaded}
                   onReadyChange={handlePlaygroundReadyChange}
                   errorLocalizerEnabled={
-                    mode === "composite" ? false : errorLocalizerEnabled
+                    mode === "composite" ? false : errorLocalizerActive
                   }
                   templateFormat={templateFormat}
                 />
@@ -1319,10 +1340,26 @@ const EvalCreatePage = () => {
                 {(() => {
                   const hasCompositeChildren = selectedChildren.length > 0;
                   const hasCode = !!code.trim();
-                  const hasInstructions = !!instructions.trim();
-                  const instructionVariables = hasInstructions
-                    ? extractVariables(instructions, templateFormat)
-                    : [];
+                  // For LLM evals, prompt content and its variables can live
+                  // in any turn (System / User / Assistant), not just the
+                  // instructions field (which mirrors the System turn).
+                  const hasAnyPromptContent =
+                    evalType === "llm"
+                      ? !!instructions.trim() ||
+                        (Array.isArray(messages) &&
+                          messages.some((m) => (m?.content || "").trim()))
+                      : !!instructions.trim();
+                  const hasInstructions = hasAnyPromptContent;
+                  const instructionVariables =
+                    evalType === "llm"
+                      ? extractVariablesFromMessages(
+                          instructions,
+                          messages,
+                          templateFormat,
+                        )
+                      : hasInstructions
+                        ? extractVariables(instructions, templateFormat)
+                        : [];
                   const hasInstructionVariables =
                     instructionVariables.length > 0;
                   const instructionsReady =
@@ -1422,7 +1459,15 @@ const EvalCreatePage = () => {
                       "Give this evaluation a name before saving.";
                   } else if (evalType === "code" && !code.trim()) {
                     saveDisabledReason = "Write some code before saving.";
-                  } else if (evalType !== "code" && !instructions.trim()) {
+                  } else if (
+                    evalType !== "code" &&
+                    !instructions.trim() &&
+                    !(
+                      evalType === "llm" &&
+                      Array.isArray(messages) &&
+                      messages.some((m) => (m?.content || "").trim())
+                    )
+                  ) {
                     saveDisabledReason = "Add instructions before saving.";
                   } else if (
                     evalType !== "code" &&

@@ -54,13 +54,13 @@ The backend will be at `http://localhost:8000`, the frontend at `http://localhos
 yarn install
 
 # For Python hooks (black, isort, mypy, Django system checks):
-cd futureagi && make pre-commit-install
+./scripts/setup-python-hooks.sh
 ```
 
-On every commit, `lint-staged` auto-formats and lints the staged files:
+On every commit:
 
-- `frontend/src/**` → ESLint + Prettier
-- `futureagi/**/*.py` → `black`, `isort`, `mypy` (via pre-commit)
+- `lint-staged` auto-formats and lints frontend files (`frontend/src/**` → ESLint + Prettier)
+- `pre-commit` runs Python hooks (`futureagi/**/*.py` → `black`, `isort`, `mypy`)
 
 Branch names are validated on `git push`.
 
@@ -104,7 +104,7 @@ Good feature requests:
 
 1. Pick a [`good first issue`](https://github.com/future-agi/future-agi/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) (or open one)
 2. Comment that you're working on it so we don't double-up
-3. Branch from `main`: `git checkout -b fix/short-description`
+3. Branch from `dev`: `git checkout -b fix/short-description`
 4. Make your change — keep the diff small and focused
 5. Add tests (every bug fix needs a regression test)
 6. Make sure `make check-all` passes
